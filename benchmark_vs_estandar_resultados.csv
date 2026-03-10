@@ -1,2 +1,7 @@
 Agente,Victorias,Puntos,Partidas,Ratio Victorias,Media Puntos,Puesto Medio
-Agents.Prueba1.RandomAgent,2264,105863,28800,0.0786,3.68,3.04
+"Agents.StevenAgent.GeneticAgent{'w_pips': 1.0, 'w_diversity': 0.8, 'w_port': 1.2, 'w_expand': 1.0, 'alpha_settlement': 0.5, 'alpha_city': 0.15, 'alpha_dev': 0.15, 'alpha_road': 0.2, 'w_robber_block': 0.8, 'risk_hand_limit': 5}",8386,161881,28800,0.2912,5.62,2.40
+Agents.StevenAgent.GeneticAgent,8213,160820,28800,0.2852,5.58,2.41
+"Agents.StevenAgent.GeneticAgent{'w_pips': 1.1, 'w_diversity': 0.6, 'w_port': 0.6, 'w_expand': 0.5, 'alpha_settlement': 0.3, 'alpha_city': 0.35, 'alpha_dev': 0.25, 'alpha_road': 0.1, 'w_robber_block': 2.0, 'risk_hand_limit': 4}",8068,159699,28800,0.2801,5.55,2.42
+"Agents.StevenAgent.GeneticAgent{'w_pips': 1.5, 'w_diversity': 1.0, 'w_port': 0.7, 'w_expand': 0.6, 'alpha_settlement': 0.35, 'alpha_city': 0.4, 'alpha_dev': 0.2, 'alpha_road': 0.05, 'w_robber_block': 1.3, 'risk_hand_limit': 6}",8021,159717,28800,0.2785,5.55,2.42
+"Agents.StevenAgent.GeneticAgent{'w_pips': 1.8, 'w_diversity': 0.3, 'w_port': 0.3, 'w_expand': 0.3, 'alpha_settlement': 0.15, 'alpha_city': 0.55, 'alpha_dev': 0.2, 'alpha_road': 0.1, 'w_robber_block': 1.2, 'risk_hand_limit': 7}",7363,154920,28800,0.2557,5.38,2.45
+"Agents.StevenAgent.GeneticAgent{'w_pips': 1.2, 'w_diversity': 0.7, 'w_port': 0.4, 'w_expand': 0.3, 'alpha_settlement': 0.2, 'alpha_city': 0.2, 'alpha_dev': 0.45, 'alpha_road': 0.15, 'w_robber_block': 1.5, 'risk_hand_limit': 6}",7206,151727,28800,0.2502,5.27,2.49
