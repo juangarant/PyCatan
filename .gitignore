@@ -170,3 +170,7 @@ pyproject.toml
 # Other
 Traces/
 .vscode/
+
+# Benchmarks
+benchmark_vs_estandar_resultados.csv
+benchmark_vs_random_resultados.csv

@@ -25,7 +25,7 @@ porcentaje_workers = 0.95
 
 # Agentes a evaluar: (ruta_clase, params)
 agentes_a_evaluar = [
-    ("Agents.AdrianHerasAgent.AdrianHerasAgent", None), # Por ejemplo, si quieres evaluar el agente AdrianHerasAgent, que está en Agents.AdrianHerasAgent sin parámetros adicionales
+    ("Agents.Prueba1.RandomAgent", None), # Por ejemplo, si quieres evaluar el agente AdrianHerasAgent, que está en Agents.AdrianHerasAgent sin parámetros adicionales
     # Se pueden poner varios agentes para evaluar y comparar, con y sin parámetros personalizados, por si queremos probar varias configuraciones del mismo agente.
 ]
 
