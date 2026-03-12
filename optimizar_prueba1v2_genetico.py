@@ -58,14 +58,15 @@ ALL_PERMUTATIONS = list(itertools.permutations(BENCHMARK_AGENTS, 3))
 #  Parámetros del algoritmo genético
 # ---------------------------------------------------------------------------
 NGEN = 30                # Generaciones
-POP_SIZE = 40            # Tamaño de la población
+POP_SIZE = 20            # Tamaño de la población
 CXPB = 0.6              # Probabilidad de cruce
 MUTPB = 0.3             # Probabilidad de mutación
 TOURNSIZE = 3            # Tamaño del torneo de selección
-PERMS_PER_EVAL = 20      # Permutaciones de oponentes muestreadas por evaluación
+PERMS_PER_EVAL = 5       # Permutaciones de oponentes muestreadas por evaluación
                          # (cada una genera 4 partidas, una por posición)
 MAX_ROUNDS = 200         # Rondas máximas por partida
-WORKERS_PERCENT = 0.90   # Porcentaje de CPUs
+WORKERS_PERCENT = 0.50   # Porcentaje de CPUs (menos = menos memoria)
+GAME_TIMEOUT = 30        # Timeout en segundos por partida
 
 # ---------------------------------------------------------------------------
 #  Definición del espacio de parámetros
@@ -199,6 +200,8 @@ def evalAgent(individual):
 
     Fitness = ratio_victorias × 100 + media_puntos
     """
+    import multiprocessing as mp
+
     params = individual_to_dict(individual)
 
     # Muestrear permutaciones (sin repetir si hay suficientes)
@@ -215,19 +218,28 @@ def evalAgent(individual):
     total_rank = 0
     n_games = len(tasks)
 
-    # Ejecutar las partidas en paralelo
+    # Ejecutar con multiprocessing.Pool + apply_async + timeout real
     n_workers = max(1, int((os.cpu_count() or 1) * WORKERS_PERCENT))
-    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-        results = list(executor.map(_eval_single_game, tasks))
+    ctx = mp.get_context('spawn')
+    pool = ctx.Pool(processes=n_workers)
 
-    for victory, points, rank in results:
-        total_wins += victory
-        total_points += points
-        total_rank += rank
+    try:
+        async_results = [pool.apply_async(_eval_single_game, (t,)) for t in tasks]
+        for ar in async_results:
+            try:
+                victory, points, rank = ar.get(timeout=GAME_TIMEOUT)
+                total_wins += victory
+                total_points += points
+                total_rank += rank
+            except (mp.TimeoutError, Exception):
+                # Partida colgada o error → contar como derrota
+                total_rank += 4
+    finally:
+        pool.terminate()
+        pool.join()
 
     win_rate = total_wins / n_games
     avg_points = total_points / n_games
-    avg_rank = total_rank / n_games
 
     # Fitness compuesto: enfatiza victorias, bonifica puntos
     fitness = win_rate * 100 + avg_points
@@ -269,8 +281,10 @@ def mutGaussianParam(individual, mu=0, indpb=0.3):
 #  Configuración DEAP
 # ---------------------------------------------------------------------------
 
-creator.create("FitnessMax", base.Fitness, weights=(1.0,))
-creator.create("Individual", list, fitness=creator.FitnessMax)
+if not hasattr(creator, "FitnessMax"):
+    creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+if not hasattr(creator, "Individual"):
+    creator.create("Individual", list, fitness=creator.FitnessMax)
 
 toolbox = base.Toolbox()
 
@@ -316,6 +330,7 @@ def main():
     print(f"  Permutaciones/eval: {PERMS_PER_EVAL} (de {len(ALL_PERMUTATIONS)} posibles)")
     print(f"  Partidas/individuo: {games_per_ind} ({PERMS_PER_EVAL} perms × 4 pos)")
     print(f"  Max rondas/partida: {MAX_ROUNDS}")
+    print(f"  Timeout/partida:    {GAME_TIMEOUT}s")
     print(f"  Oponentes: {[c.__name__ for c in BENCHMARK_AGENTS]}")
     print(f"  CXPB={CXPB}  MUTPB={MUTPB}  Torneo={TOURNSIZE}")
     print(f"  Espacio de parámetros ({N_PARAMS}):")
@@ -453,4 +468,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     population, hof = main()
