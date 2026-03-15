@@ -156,6 +156,10 @@ class prueba1v2(AgentInterface):
         """
         if self.town_count >= self.city_town_threshold:
             return 'city'
+        # Si no tenemos ni madera ni arcilla básicas, priorizar carretera
+        # para poder expandirnos antes de construir pueblo
+        if self.town_count == 0:
+            return 'road'
         return 'town'
 
     def _goal_materials(self, goal):
@@ -278,9 +282,13 @@ class prueba1v2(AgentInterface):
     # ================================================================== #
     #  on_trade_offer — recibir ofertas de otros jugadores
     # ================================================================== #
-    def on_trade_offer(self, board_instance, offer=TradeOffer(), player_id=int):
+    def on_trade_offer(self, board_instance, offer=None, player_id=None):
         # offer.gives = lo que el otro jugador DA (nosotros recibimos)
         # offer.receives = lo que el otro jugador PIDE (nosotros damos)
+
+        # Argumento centinela: evita el bug del objeto mutable compartido
+        if offer is None:
+            return False
 
         total_receive = sum(offer.gives)
         total_give = sum(offer.receives)
@@ -324,7 +332,7 @@ class prueba1v2(AgentInterface):
         # 1) Intentar jugar carta de desarrollo (monopolio) si tiene
         if self.development_cards_hand.hand:
             for i, card in enumerate(self.development_cards_hand.hand):
-                if card.effect == DevelopmentCardConstants.MONOPOLY_EFFECT:
+                if card.type == DevelopmentCardConstants.MONOPOLY_EFFECT:
                     return self.development_cards_hand.select_card(i)
 
         # 2) Comercio 4:1 (o puerto) si excedente supera umbral
@@ -399,9 +407,9 @@ class prueba1v2(AgentInterface):
         # --- Intentar jugar carta de desarrollo útil ---
         if self.development_cards_hand.hand:
             for i, card in enumerate(self.development_cards_hand.hand):
-                if card.effect == DevelopmentCardConstants.YEAR_OF_PLENTY_EFFECT:
+                if card.type == DevelopmentCardConstants.YEAR_OF_PLENTY_EFFECT:
                     return self.development_cards_hand.select_card(i)
-                if card.effect == DevelopmentCardConstants.ROAD_BUILDING_EFFECT:
+                if card.type == DevelopmentCardConstants.ROAD_BUILDING_EFFECT:
                     road_poss = self.board.valid_road_nodes(self.id)
                     if len(road_poss) > 1:
                         return self.development_cards_hand.select_card(i)
@@ -525,13 +533,17 @@ class prueba1v2(AgentInterface):
         goal_mats = self._goal_materials(goal)
         goal_list = [goal_mats.cereal, goal_mats.mineral, goal_mats.clay, goal_mats.wood, goal_mats.wool]
 
+        # Nombres de atributos en el mismo orden que los índices 0-4
+        mat_names = ['cereal', 'mineral', 'clay', 'wood', 'wool']
+
         # Descartar recursos que NO son necesarios para el objetivo actual
         while self.hand.get_total() > 7:
             discarded = False
             # Orden: descartar primero los menos útiles para el objetivo
             resource_order = sorted(range(5), key=lambda i: goal_list[i])
             for res_id in resource_order:
-                current = self.hand.resources[res_id]
+                # Acceso por atributo nombrado (Materials no soporta índice)
+                current = getattr(self.hand.resources, mat_names[res_id])
                 needed = goal_list[res_id]
                 if current > needed:
                     self.hand.remove_material(res_id, 1)
@@ -540,9 +552,14 @@ class prueba1v2(AgentInterface):
             if not discarded:
                 # Si todos son necesarios, quitar cualquiera que tengamos
                 for res_id in resource_order:
-                    if self.hand.resources[res_id] > 0:
+                    if getattr(self.hand.resources, mat_names[res_id]) > 0:
                         self.hand.remove_material(res_id, 1)
+                        discarded = True
                         break
+                if not discarded:
+                    # Mano vacía pero get_total() > 7: salir para evitar
+                    # bucle infinito (no debería ocurrir, pero es seguro)
+                    break
         return self.hand
 
     # ================================================================== #

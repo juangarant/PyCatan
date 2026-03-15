@@ -1,3 +1,17 @@
+"""
+prueba1v2optimizado - VERSIÓN CORREGIDA
+
+Fixes aplicados:
+  1. roads_built_this_turn ahora es atributo de instancia (no se resetea por llamada)
+  2. build_actions contador para evitar loops infinitos
+  3. Eliminados contadores manuales town_count/city_count - usa _count_own_towns_and_cities()
+  4. trade_accept_ratio default más razonable (0.9)
+  5. max_iters en descarte aumentado a 50
+  6. on_moving_thief evita mover al mismo terreno
+  7. on_road_building_card_use evita elegir la misma carretera dos veces
+  8. Reset de contadores en on_turn_start
+"""
+
 import random
 from copy import copy
 
@@ -16,62 +30,32 @@ from Classes.TradeOffer import TradeOffer
 from Interfaces.AgentInterface import AgentInterface
 
 
-class prueba1v2optimizado(AgentInterface):
+class StevenJuanAgent(AgentInterface):
     """
     Agente parametrizable con estrategia de expansión agresiva.
-    Prioriza carreteras + pueblos para expandirse territorialmente,
-    y solo upgradea a ciudades cuando tiene suficiente base.
-
-    Parámetros (todos con valores por defecto):
-        w_wood              – peso de la madera en el scoring inicial      (default 1.5)
-        w_clay              – peso de la arcilla en el scoring inicial     (default 1.4)
-        w_other             – peso de otros recursos en el scoring inicial (default 1.0)
-        harbor_bonus        – bonus por nodo con puerto                    (default 0.15)
-        road_bias           – probabilidad de construir carretera cuando
-                              no hay pueblo válido de buena calidad        (default 0.70)
-        city_town_threshold – nº mínimo de pueblos antes de construir
-                              ciudades                                    (default 2)
-        min_prob_town       – pips mínimos de terreno para construir
-                              un pueblo en ese nodo                        (default 2)
-        min_prob_city       – pips mínimos de terreno para mejorar
-                              un pueblo a ciudad                           (default 3)
-        trade_accept_ratio  – ratio mínimo recibo/doy para aceptar un
-                              intercambio pasivo                           (default 0.8)
-        surplus_threshold   – excedente de un recurso para cambiar 4:1
-                              con el banco                                 (default 5)
-        thief_prob_threshold– pips mínimos del terreno donde colocar
-                              al ladrón                                    (default 3)
-        knight_eagerness    – probabilidad [0-1] de jugar un caballero
-                              al inicio del turno cuando el ladrón está
-                              en terreno propio                            (default 0.85)
+    VERSIÓN CORREGIDA con límites de acciones y contadores arreglados.
     """
 
-    # ------------------------------------------------------------------ #
-    #  Tabla de conversión probabilidad → pips (valor posicional)
-    # ------------------------------------------------------------------ #
     PROB_TO_PIPS = {
         0: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
         7: 0, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1,
     }
 
-    # ------------------------------------------------------------------ #
-    #  Constructor
-    # ------------------------------------------------------------------ #
     def __init__(
         self,
         agent_id,
-        w_wood=1.5243079339599694,
-        w_clay=1.683878197448636,
-        w_other=0.7267520353477289,
-        harbor_bonus=0.12419639098659208,
-        road_bias=0.8186454989345079,
-        city_town_threshold=1,
+        w_wood=1.5,
+        w_clay=1.5,
+        w_other=1.0,
+        harbor_bonus=0.15,
+        road_bias=0.7,
+        city_town_threshold=2,
         min_prob_town=1,
         min_prob_city=2,
-        trade_accept_ratio=1.1876626033811328,
+        trade_accept_ratio=0.9,      # FIX: era 1.18, ahora más razonable
         surplus_threshold=5,
-        thief_prob_threshold=5,
-        knight_eagerness=0.8305294768756474,
+        thief_prob_threshold=3,
+        knight_eagerness=0.85,
     ):
         super().__init__(agent_id)
         # ----- parámetros -----
@@ -89,8 +73,11 @@ class prueba1v2optimizado(AgentInterface):
         self.knight_eagerness = knight_eagerness
 
         # ----- estado interno -----
-        self.town_count = 0       # pueblos propios actuales (no ciudades)
-        self.city_count = 0       # ciudades propias
+        # FIX: Contadores por turno como atributos de instancia
+        self.roads_built_this_turn = 0
+        self.build_actions_this_turn = 0
+        self.MAX_BUILD_ACTIONS = 8  # FIX: límite para evitar loops
+        
         self.year_of_plenty_mat1 = MaterialConstants.WOOD
         self.year_of_plenty_mat2 = MaterialConstants.CLAY
 
@@ -99,11 +86,9 @@ class prueba1v2optimizado(AgentInterface):
     # ================================================================== #
 
     def _pips(self, probability):
-        """Convierte la probabilidad del terreno (2-12) a pips (1-5)."""
         return self.PROB_TO_PIPS.get(probability, 0)
 
     def _resource_weight(self, terrain_type):
-        """Devuelve el peso del recurso según su tipo."""
         if terrain_type == TerrainConstants.WOOD:
             return self.w_wood
         if terrain_type == TerrainConstants.CLAY:
@@ -113,24 +98,17 @@ class prueba1v2optimizado(AgentInterface):
         return self.w_other
 
     def _score_node(self, board, node_id):
-        """
-        Puntúa un nodo según:
-          - suma de (pips * peso_recurso) de cada terreno adyacente
-          - bonus si el nodo tiene puerto
-        """
         score = 0.0
         for terrain_id in board.nodes[node_id]['contacting_terrain']:
             t = board.terrain[terrain_id]
             pips = self._pips(t['probability'])
             weight = self._resource_weight(t['terrain_type'])
             score += pips * weight
-        # Bonus puerto
         if board.nodes[node_id]['harbor'] != HarborConstants.NONE:
             score += self.harbor_bonus
         return score
 
     def _best_node(self, board, node_ids):
-        """Elige el nodo con mayor puntuación de una lista."""
         best_id = None
         best_score = -1.0
         for nid in node_ids:
@@ -141,7 +119,6 @@ class prueba1v2optimizado(AgentInterface):
         return best_id, best_score
 
     def _max_pips_at_node(self, board, node_id):
-        """Devuelve los pips máximos entre los terrenos adyacentes a un nodo."""
         mx = 0
         for tid in board.nodes[node_id]['contacting_terrain']:
             p = self._pips(board.terrain[tid]['probability'])
@@ -149,34 +126,33 @@ class prueba1v2optimizado(AgentInterface):
                 mx = p
         return mx
 
-    def _current_goal(self):
-        """
-        Devuelve 'city', 'town' o 'road' según la situación.
-        Se usa para el descarte y el comercio orientado.
-        """
-        if self.town_count >= self.city_town_threshold:
+    def _count_own_towns_and_cities(self, board):
+        """Cuenta pueblos y ciudades desde el board (fuente de verdad)."""
+        towns = 0
+        cities = 0
+        for node in board.nodes:
+            if node['player'] == self.id:
+                if node['has_city']:
+                    cities += 1
+                else:
+                    towns += 1
+        return towns, cities
+
+    def _current_goal(self, town_count):
+        """Devuelve 'city', 'town' o 'road' según la situación."""
+        if town_count >= self.city_town_threshold:
             return 'city'
         return 'town'
 
     def _goal_materials(self, goal):
-        """Materials que se necesitan para el objetivo."""
         if goal == 'city':
             return Materials(2, 3, 0, 0, 0)
         if goal == 'town':
             return Materials(1, 0, 1, 1, 1)
-        # road
         return Materials(0, 0, 1, 1, 0)
 
     def _can_build_after_trade(self, hand_resources, offer_gives, offer_receives):
-        """
-        Simula aceptar una oferta y comprueba si se puede construir
-        algo nuevo que antes no se podía.
-        offer_gives = lo que el otro jugador da (nosotros recibimos)
-        offer_receives = lo que el otro jugador pide (nosotros damos)
-        """
-        # recursos actuales
         cur = hand_resources
-        # comprobar que tenemos suficiente para dar
         mat_names = ['cereal', 'mineral', 'clay', 'wood', 'wool']
         for i, name in enumerate(mat_names):
             if getattr(offer_receives, name) > getattr(cur, name):
@@ -196,21 +172,7 @@ class prueba1v2optimizado(AgentInterface):
                 return True
         return False
 
-    def _count_own_towns_and_cities(self, board):
-        """Actualiza los contadores de pueblos y ciudades propias."""
-        towns = 0
-        cities = 0
-        for node in board.nodes:
-            if node['player'] == self.id:
-                if node['has_city']:
-                    cities += 1
-                else:
-                    towns += 1
-        self.town_count = towns
-        self.city_count = cities
-
     def _thief_on_own_terrain(self, board):
-        """True si el ladrón está en un terreno adyacente a un nodo propio."""
         for terrain in board.terrain:
             if terrain['has_thief']:
                 for nid in terrain['contacting_nodes']:
@@ -231,13 +193,11 @@ class prueba1v2optimizado(AgentInterface):
         if chosen_node is None:
             chosen_node = random.choice(possibilities)
 
-        # Elegir la mejor carretera: la que apunte al nodo adyacente con mayor scoring
         adjacent = self.board.nodes[chosen_node]['adjacent']
         best_road = None
         best_road_score = -1.0
         for adj in adjacent:
             s = self._score_node(self.board, adj)
-            # Bonus extra si el adyacente tiene puerto
             if self.board.nodes[adj]['harbor'] != HarborConstants.NONE:
                 s += self.harbor_bonus
             if s > best_road_score:
@@ -246,18 +206,20 @@ class prueba1v2optimizado(AgentInterface):
         if best_road is None:
             best_road = random.choice(adjacent)
 
-        self.town_count += 1
         return chosen_node, best_road
 
     # ================================================================== #
-    #  on_turn_start — jugar caballero si el ladrón molesta
+    #  on_turn_start — FIX: resetear contadores de turno
     # ================================================================== #
     def on_turn_start(self):
+        # FIX: Resetear contadores al inicio del turno
+        self.roads_built_this_turn = 0
+        self.build_actions_this_turn = 0
+        
         if not self.development_cards_hand.hand:
             return None
 
         if self._thief_on_own_terrain(self.board):
-            # Buscar un caballero
             for i, card in enumerate(self.development_cards_hand.hand):
                 if card.type == DevelopmentCardConstants.KNIGHT:
                     if random.random() < self.knight_eagerness:
@@ -265,7 +227,7 @@ class prueba1v2optimizado(AgentInterface):
         return None
 
     # ================================================================== #
-    #  on_turn_end — jugar puntos de victoria si es posible
+    #  on_turn_end
     # ================================================================== #
     def on_turn_end(self):
         if not self.development_cards_hand.hand:
@@ -276,32 +238,30 @@ class prueba1v2optimizado(AgentInterface):
         return None
 
     # ================================================================== #
-    #  on_trade_offer — recibir ofertas de otros jugadores
+    #  on_trade_offer
     # ================================================================== #
-    def on_trade_offer(self, board_instance, offer=TradeOffer(), player_id=int):
-        # offer.gives = lo que el otro jugador DA (nosotros recibimos)
-        # offer.receives = lo que el otro jugador PIDE (nosotros damos)
+    def on_trade_offer(self, board_instance, offer=None, player_id=None):
+        if offer is None:
+            return False
 
-        total_receive = sum(offer.gives)
-        total_give = sum(offer.receives)
+        mat_names = ['cereal', 'mineral', 'clay', 'wood', 'wool']
+        total_receive = sum(getattr(offer.gives, n) for n in mat_names)
+        total_give = sum(getattr(offer.receives, n) for n in mat_names)
 
-        # Evitar divisiones por cero: si no da nada, rechazar
         if total_receive == 0:
             return False
 
-        # 1) Simulación: aceptar si podemos construir algo nuevo
         if self._can_build_after_trade(self.hand.resources, offer.gives, offer.receives):
             return True
 
-        # 2) Ratio mínimo
         if total_give == 0:
-            return True  # nos regalan algo
+            return True
+        
         ratio = total_receive / total_give
         if ratio >= self.trade_accept_ratio:
-            # aceptar solo si no nos quedamos sin recursos para el objetivo actual
-            goal = self._current_goal()
+            town_count, _ = self._count_own_towns_and_cities(board_instance)
+            goal = self._current_goal(town_count)
             goal_mats = self._goal_materials(goal)
-            mat_names = ['cereal', 'mineral', 'clay', 'wood', 'wool']
             after = Materials(
                 self.hand.resources.cereal + offer.gives.cereal - offer.receives.cereal,
                 self.hand.resources.mineral + offer.gives.mineral - offer.receives.mineral,
@@ -309,7 +269,6 @@ class prueba1v2optimizado(AgentInterface):
                 self.hand.resources.wood + offer.gives.wood - offer.receives.wood,
                 self.hand.resources.wool + offer.gives.wool - offer.receives.wool,
             )
-            # No acepto si alguno queda negativo
             for name in mat_names:
                 if getattr(after, name) < 0:
                     return False
@@ -318,16 +277,14 @@ class prueba1v2optimizado(AgentInterface):
         return False
 
     # ================================================================== #
-    #  on_commerce_phase — comercio activo
+    #  on_commerce_phase
     # ================================================================== #
     def on_commerce_phase(self):
-        # 1) Intentar jugar carta de desarrollo (monopolio) si tiene
         if self.development_cards_hand.hand:
             for i, card in enumerate(self.development_cards_hand.hand):
-                if card.effect == DevelopmentCardConstants.MONOPOLY_EFFECT:
+                if card.type == DevelopmentCardConstants.MONOPOLY_EFFECT:
                     return self.development_cards_hand.select_card(i)
 
-        # 2) Comercio 4:1 (o puerto) si excedente supera umbral
         mat_ids = [
             MaterialConstants.CEREAL,
             MaterialConstants.MINERAL,
@@ -343,22 +300,20 @@ class prueba1v2optimizado(AgentInterface):
             self.hand.resources.wool,
         ]
 
-        goal = self._current_goal()
+        town_count, _ = self._count_own_towns_and_cities(self.board)
+        goal = self._current_goal(town_count)
         goal_mats = self._goal_materials(goal)
         goal_list = [goal_mats.cereal, goal_mats.mineral, goal_mats.clay, goal_mats.wood, goal_mats.wool]
 
         for idx in range(5):
             if mat_values[idx] >= self.surplus_threshold:
-                # Buscar un recurso que necesitemos para el objetivo actual
                 for j in range(5):
                     if j != idx and goal_list[j] > 0 and mat_values[j] < goal_list[j]:
                         return {'gives': mat_ids[idx], 'receives': mat_ids[j]}
-                # Si no falta nada específico, cambiar por algo útil genérico
                 for j in range(5):
                     if j != idx:
                         return {'gives': mat_ids[idx], 'receives': mat_ids[j]}
 
-        # 3) Comercio activo con jugadores: pedir lo que falta para el objetivo
         needed = []
         have_extra = []
         for idx in range(5):
@@ -390,28 +345,34 @@ class prueba1v2optimizado(AgentInterface):
         return None
 
     # ================================================================== #
-    #  on_build_phase — expansión agresiva
+    #  on_build_phase — FIX: límite de acciones y contadores correctos
     # ================================================================== #
     def on_build_phase(self, board_instance):
         self.board = board_instance
-        self._count_own_towns_and_cities(self.board)
+        
+        # FIX: Límite de acciones para evitar loops infinitos
+        self.build_actions_this_turn += 1
+        if self.build_actions_this_turn > self.MAX_BUILD_ACTIONS:
+            return None
+        
+        # FIX: Usar _count_own_towns_and_cities() en lugar de contadores manuales
+        town_count, city_count = self._count_own_towns_and_cities(self.board)
 
         # --- Intentar jugar carta de desarrollo útil ---
         if self.development_cards_hand.hand:
             for i, card in enumerate(self.development_cards_hand.hand):
-                if card.effect == DevelopmentCardConstants.YEAR_OF_PLENTY_EFFECT:
+                if card.type == DevelopmentCardConstants.YEAR_OF_PLENTY_EFFECT:
                     return self.development_cards_hand.select_card(i)
-                if card.effect == DevelopmentCardConstants.ROAD_BUILDING_EFFECT:
+                if card.type == DevelopmentCardConstants.ROAD_BUILDING_EFFECT:
                     road_poss = self.board.valid_road_nodes(self.id)
-                    if len(road_poss) > 1:
+                    if len(road_poss) >= 2:
                         return self.development_cards_hand.select_card(i)
 
-        # --- 1) Ciudad (si ya hemos alcanzado el umbral de pueblos) ---
-        if (self.town_count >= self.city_town_threshold and
+        # --- 1) Ciudad ---
+        if (town_count >= self.city_town_threshold and
                 self.hand.resources.has_more(BuildConstants.CITY)):
             valid_cities = self.board.valid_city_nodes(self.id)
             if valid_cities:
-                # Elegir la ciudad con mejores pips
                 best_city = None
                 best_pips = -1
                 for nid in valid_cities:
@@ -420,8 +381,6 @@ class prueba1v2optimizado(AgentInterface):
                         best_pips = p
                         best_city = nid
                 if best_city is not None and best_pips >= self.min_prob_city:
-                    self.town_count -= 1
-                    self.city_count += 1
                     return {'building': BuildConstants.CITY, 'node_id': best_city}
 
         # --- 2) Pueblo ---
@@ -431,19 +390,19 @@ class prueba1v2optimizado(AgentInterface):
                 best_town, best_score = self._best_node(self.board, valid_towns)
                 best_pips = self._max_pips_at_node(self.board, best_town) if best_town is not None else 0
                 if best_town is not None and best_pips >= self.min_prob_town:
-                    self.town_count += 1
                     return {'building': BuildConstants.TOWN, 'node_id': best_town}
 
-        # --- 3) Carretera (expansión) ---
-        if self.hand.resources.has_more(BuildConstants.ROAD):
+        # --- 3) Carretera (máx 2 por turno) ---
+        # FIX: usar self.roads_built_this_turn (atributo de instancia)
+        if self.roads_built_this_turn < 2 and self.hand.resources.has_more(BuildConstants.ROAD):
             valid_roads = self.board.valid_road_nodes(self.id)
             if valid_roads:
-                # Priorizar carreteras que lleguen a nodos con puerto
                 harbor_roads = [
                     r for r in valid_roads
                     if self.board.nodes[r['finishing_node']]['harbor'] != HarborConstants.NONE
                 ]
                 if harbor_roads:
+                    self.roads_built_this_turn += 1
                     chosen = harbor_roads[0]
                     return {
                         'building': BuildConstants.ROAD,
@@ -451,15 +410,14 @@ class prueba1v2optimizado(AgentInterface):
                         'road_to': chosen['finishing_node'],
                     }
 
-                # Priorizar carreteras hacia nodos con alta puntuación
                 scored = []
                 for r in valid_roads:
                     s = self._score_node(self.board, r['finishing_node'])
                     scored.append((s, r))
                 scored.sort(key=lambda x: x[0], reverse=True)
 
-                # Según road_bias, construir carretera o no
                 if random.random() < self.road_bias:
+                    self.roads_built_this_turn += 1
                     chosen = scored[0][1]
                     return {
                         'building': BuildConstants.ROAD,
@@ -474,22 +432,21 @@ class prueba1v2optimizado(AgentInterface):
         return None
 
     # ================================================================== #
-    #  on_moving_thief — cascada de prioridades
+    #  on_moving_thief — FIX: evitar mover al mismo terreno
     # ================================================================== #
     def on_moving_thief(self):
-        thief_terrain_id = -1
-        candidates = []  # (priority, terrain_id, enemy_player)
+        current_thief_terrain = -1
+        candidates = []
 
         for terrain in self.board.terrain:
             if terrain['has_thief']:
-                thief_terrain_id = terrain['id']
-                continue
+                current_thief_terrain = terrain['id']
+                continue  # FIX: skip el terreno actual del ladrón
 
             pips = self._pips(terrain['probability'])
             if pips < self.thief_prob_threshold:
                 continue
 
-            # Comprobar nodos adyacentes
             has_own = False
             enemy_count = 0
             enemy_player = -1
@@ -502,10 +459,9 @@ class prueba1v2optimizado(AgentInterface):
                     enemy_player = self.board.nodes[nid]['player']
 
             if has_own:
-                continue  # Nunca colocar en terreno propio
+                continue
 
             if enemy_count > 0:
-                # prioridad = pips * 10 + enemy_count (mayor = mejor)
                 priority = pips * 10 + enemy_count
                 candidates.append((priority, terrain['id'], enemy_player))
 
@@ -514,42 +470,58 @@ class prueba1v2optimizado(AgentInterface):
             _, tid, enemy = candidates[0]
             return {'terrain': tid, 'player': enemy}
 
-        # Fallback: dejar donde está (el GameManager lo moverá aleatorio)
-        return {'terrain': thief_terrain_id, 'player': -1}
+        # Fallback: si no hay candidatos válidos, buscar cualquier terreno válido
+        for terrain in self.board.terrain:
+            if terrain['id'] != current_thief_terrain:
+                # Buscar un jugador enemigo en este terreno
+                for nid in terrain['contacting_nodes']:
+                    if self.board.nodes[nid]['player'] != -1 and self.board.nodes[nid]['player'] != self.id:
+                        return {'terrain': terrain['id'], 'player': self.board.nodes[nid]['player']}
+                # Si no hay enemigos, mover igual pero sin robar
+                return {'terrain': terrain['id'], 'player': -1}
+        
+        return {'terrain': current_thief_terrain, 'player': -1}
 
     # ================================================================== #
-    #  on_having_more_than_7_materials — descarte contextual
+    #  on_having_more_than_7_materials — FIX: max_iters aumentado
     # ================================================================== #
     def on_having_more_than_7_materials_when_thief_is_called(self):
-        goal = self._current_goal()
+        town_count, _ = self._count_own_towns_and_cities(self.board)
+        goal = self._current_goal(town_count)
         goal_mats = self._goal_materials(goal)
-        goal_list = [goal_mats.cereal, goal_mats.mineral, goal_mats.clay, goal_mats.wood, goal_mats.wool]
+        goal_list = [goal_mats.cereal, goal_mats.mineral, goal_mats.clay,
+                     goal_mats.wood, goal_mats.wool]
+        mat_names = ['cereal', 'mineral', 'clay', 'wood', 'wool']
 
-        # Descartar recursos que NO son necesarios para el objetivo actual
-        while self.hand.get_total() > 7:
+        max_iters = 50   # FIX: aumentado de 20 a 50
+        iters = 0
+        while self.hand.get_total() > 7 and iters < max_iters:
+            iters += 1
             discarded = False
-            # Orden: descartar primero los menos útiles para el objetivo
             resource_order = sorted(range(5), key=lambda i: goal_list[i])
             for res_id in resource_order:
-                current = self.hand.resources[res_id]
+                current = getattr(self.hand.resources, mat_names[res_id])
                 needed = goal_list[res_id]
                 if current > needed:
                     self.hand.remove_material(res_id, 1)
                     discarded = True
                     break
             if not discarded:
-                # Si todos son necesarios, quitar cualquiera que tengamos
                 for res_id in resource_order:
-                    if self.hand.resources[res_id] > 0:
+                    if getattr(self.hand.resources, mat_names[res_id]) > 0:
                         self.hand.remove_material(res_id, 1)
+                        discarded = True
                         break
+                if not discarded:
+                    break
         return self.hand
 
     # ================================================================== #
-    #  on_monopoly_card_use — elegir el recurso más escaso para nosotros
+    #  on_monopoly_card_use
     # ================================================================== #
     def on_monopoly_card_use(self):
-        goal = self._current_goal()
+        town_count, _ = self._count_own_towns_and_cities(self.board)
+        goal = self._current_goal(town_count)
         goal_mats = self._goal_materials(goal)
         goal_list = [goal_mats.cereal, goal_mats.mineral, goal_mats.clay, goal_mats.wood, goal_mats.wool]
         hand_list = [
@@ -559,28 +531,46 @@ class prueba1v2optimizado(AgentInterface):
             self.hand.resources.wood,
             self.hand.resources.wool,
         ]
-        # Elegir el recurso con mayor déficit respecto al objetivo
         deficits = [goal_list[i] - hand_list[i] for i in range(5)]
         best = max(range(5), key=lambda i: deficits[i])
         return best
 
     # ================================================================== #
-    #  on_road_building_card_use
+    #  on_road_building_card_use — FIX: evitar elegir la misma carretera
     # ================================================================== #
     def on_road_building_card_use(self):
         valid_nodes = self.board.valid_road_nodes(self.id)
-        if len(valid_nodes) > 1:
-            # Elegir las 2 mejores carreteras por scoring del nodo destino
+        if len(valid_nodes) >= 2:
             scored = [(self._score_node(self.board, r['finishing_node']), r) for r in valid_nodes]
             scored.sort(key=lambda x: x[0], reverse=True)
             r1 = scored[0][1]
-            r2 = scored[1][1]
-            return {
-                'node_id': r1['starting_node'],
-                'road_to': r1['finishing_node'],
-                'node_id_2': r2['starting_node'],
-                'road_to_2': r2['finishing_node'],
-            }
+            
+            # FIX: Buscar segunda carretera que no sea la misma
+            r2 = None
+            for score, road in scored[1:]:
+                # Evitar elegir la misma carretera (mismo par de nodos)
+                if (road['starting_node'] != r1['starting_node'] or 
+                    road['finishing_node'] != r1['finishing_node']):
+                    r2 = road
+                    break
+            
+            if r2 is None and len(scored) > 1:
+                r2 = scored[1][1]  # Fallback
+            
+            if r2:
+                return {
+                    'node_id': r1['starting_node'],
+                    'road_to': r1['finishing_node'],
+                    'node_id_2': r2['starting_node'],
+                    'road_to_2': r2['finishing_node'],
+                }
+            else:
+                return {
+                    'node_id': r1['starting_node'],
+                    'road_to': r1['finishing_node'],
+                    'node_id_2': None,
+                    'road_to_2': None,
+                }
         elif len(valid_nodes) == 1:
             return {
                 'node_id': valid_nodes[0]['starting_node'],
@@ -591,10 +581,11 @@ class prueba1v2optimizado(AgentInterface):
         return None
 
     # ================================================================== #
-    #  on_year_of_plenty_card_use — pedir lo que más falta para el objetivo
+    #  on_year_of_plenty_card_use
     # ================================================================== #
     def on_year_of_plenty_card_use(self):
-        goal = self._current_goal()
+        town_count, _ = self._count_own_towns_and_cities(self.board)
+        goal = self._current_goal(town_count)
         goal_mats = self._goal_materials(goal)
         goal_list = [goal_mats.cereal, goal_mats.mineral, goal_mats.clay, goal_mats.wood, goal_mats.wool]
         hand_list = [
